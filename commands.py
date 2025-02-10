@@ -1,10 +1,8 @@
-# commands.py
 import os
 import json
 import requests
 import subprocess
 import keyboard
-from dotenv import load_dotenv
 from PyQt5.QtWidgets import QApplication, QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel
 from command_actions import (
     stop_music, start_music, translate_text, copy_neural_network_diagram,
@@ -14,37 +12,31 @@ import pyautogui
 import pytesseract
 from rapidfuzz import fuzz
 
-# Load environment variables from .env file
-load_dotenv()
-API_KEY = os.getenv("NB_STUDIO_API_KEY")
-if not API_KEY:
-    raise ValueError("NB_STUDIO_API_KEY not found in environment variables. Please set it in your .env file.")
+# Ollama runs locally by default on port 11434
+OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
-# Nebius API endpoint for chat completions
-NEBIUS_API_URL = "https://api.studio.nebius.ai/v1/chat/completions"
-
-def call_nebius_api(prompt):
+def call_ollama_api(prompt, model="llama3.2"):
+    """
+    Call the local Ollama API instead of Nebius.
+    """
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json"
     }
     data = {
-        "model": "meta-llama/Meta-Llama-3.1-70B-Instruct",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 1,
-        "max_tokens": 150
+        "model": model,
+        "prompt": prompt,
+        "stream": False
     }
     try:
-        response = requests.post(NEBIUS_API_URL, headers=headers, json=data)
+        response = requests.post(OLLAMA_API_URL, headers=headers, json=data)
         if response.status_code == 200:
             result = response.json()
-            reply = result["choices"][0]["message"]["content"]
-            return reply
+            return result.get("response", "")
         else:
-            print("Nebius API Error:", response.text)
+            print("Ollama API Error:", response.text)
             return None
     except requests.exceptions.RequestException as e:
-        print("Error calling Nebius API:", e)
+        print("Error calling Ollama API:", e)
         return None
 
 def confirm_and_run_script(script, parent_window):
@@ -93,12 +85,10 @@ action_mapping = {
 
 def execute_nebius_instructions(instructions):
     """
-    Parses Nebius instructions for actionable keywords and executes them.
-    This example checks for "click on", "type", and "press" commands.
+    Parses instructions for actionable keywords and executes them.
     """
     instructions_lower = instructions.lower()
     if "click on" in instructions_lower:
-        # Naively extract target text after "click on"
         idx = instructions_lower.find("click on")
         target = instructions_lower[idx + len("click on"):].split()[0]
         print("Attempting to click on element matching:", target)
@@ -141,10 +131,10 @@ def execute_system_command(command):
                 matched = True
                 break
     if not matched:
-        print("Command not recognized locally. Forwarding to Nebius API...")
-        reply = call_nebius_api(command)
+        print("Command not recognized locally. Forwarding to Ollama...")
+        reply = call_ollama_api(command)
         if reply:
-            # If reply contains actionable instructions from Nebius, execute them.
+            # If reply contains actionable instructions, execute them
             if any(keyword in reply.lower() for keyword in ["click on", "type", "press"]):
                 execute_nebius_instructions(reply)
             elif "\n" in reply and (reply.lstrip().startswith("import") or 
@@ -153,9 +143,9 @@ def execute_system_command(command):
                 parent = QApplication.activeWindow()
                 confirm_and_run_script(reply, parent)
             else:
-                print("Nebius API response:", reply)
+                print("Ollama response:", reply)
         else:
-            print("No response from Nebius API.")
+            print("No response from Ollama.")
 
 def process_command(command):
     print("Processing command:", command)

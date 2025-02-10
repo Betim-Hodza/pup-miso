@@ -1,20 +1,12 @@
-# command_actions.py
 import subprocess
-import keyboard  # pip install keyboard
+import keyboard
 import os
 import webbrowser
 import requests
-from dotenv import load_dotenv
-from PyQt5.QtWidgets import QApplication, QMessageBox, QInputDialog
+from pathlib import Path
 
-# Load environment variables
-load_dotenv()
-NB_STUDIO_API_KEY = os.getenv("NB_STUDIO_API_KEY")
-if not NB_STUDIO_API_KEY:
-    raise ValueError("NB_STUDIO_API_KEY not found in environment variables. Please set it in your .env file.")
-
-# Nebius API endpoint for chat completions
-NEBIUS_API_URL = "https://api.studio.nebius.ai/v1/chat/completions"
+# Ollama API endpoint
+OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
 # Global dictionaries to store opened process handles
 opened_apps = {}
@@ -30,20 +22,22 @@ def start_music():
 
 def translate_text():
     """
-    Capture the screen, perform OCR to extract text, detect its language,
-    and if non-English, use Nebius to translate it into English.
+    Capture the screen, perform OCR to extract text, and use Ollama to translate it.
     """
-    from PyQt5.QtWidgets import QApplication, QMessageBox
-    import pyautogui  # pip install pyautogui
-    import pytesseract  # pip install pytesseract (requires Tesseract OCR installed)
-    from langdetect import detect, DetectorFactory  # pip install langdetect
+    try:
+        import pyautogui
+        import pytesseract
+        from langdetect import detect, DetectorFactory
+    except ImportError:
+        print("Required packages not installed. Please install: pyautogui, pytesseract, langdetect")
+        return
 
     DetectorFactory.seed = 0
-    parent = QApplication.activeWindow()
     screenshot = pyautogui.screenshot()
     extracted_text = pytesseract.image_to_string(screenshot)
+    
     if not extracted_text.strip():
-        QMessageBox.information(parent, "Translation", "No text found on screen.")
+        print("No text found on screen.")
         return
 
     try:
@@ -54,30 +48,28 @@ def translate_text():
         print("Error detecting language:", e)
 
     if detected_lang == "en":
-        QMessageBox.information(parent, "Translation", "The screen text appears to be in English.")
+        print("The screen text appears to be in English.")
         return
 
-    prompt = f"Translate the following text into English: {extracted_text.strip()}"
-    headers = {
-        "Authorization": f"Bearer {NB_STUDIO_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    # Call Ollama for translation
+    prompt = f"Translate this text to English: {extracted_text.strip()}"
+    headers = {"Content-Type": "application/json"}
     data = {
-        "model": "meta-llama/Meta-Llama-3.1-70B-Instruct",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 1,
-        "max_tokens": 500
+        "model": "llama2",  # You can change this to your preferred model
+        "prompt": prompt,
+        "stream": False
     }
+
     try:
-        response = requests.post(NEBIUS_API_URL, headers=headers, json=data)
+        response = requests.post(OLLAMA_API_URL, headers=headers, json=data)
         if response.status_code == 200:
-            result = response.json()
-            translation = result["choices"][0]["message"]["content"]
-            QMessageBox.information(parent, "Translation", translation)
+            translation = response.json().get("response", "")
+            print("\nTranslation:")
+            print(translation)
         else:
-            QMessageBox.warning(parent, "Translation Error", f"API Error: {response.text}")
+            print(f"Translation Error: {response.text}")
     except requests.exceptions.RequestException as e:
-        QMessageBox.warning(parent, "Translation Error", f"Error calling Nebius API: {e}")
+        print(f"Error calling Ollama API: {e}")
 
 def copy_neural_network_diagram():
     print("Copying neural network diagram from screen... (feature not yet implemented)")
@@ -88,33 +80,33 @@ def create_new_file():
     try:
         with open(filename, "w") as f:
             f.write(content)
-        subprocess.run(["code", filename], check=True)
+        if os.name == 'nt':  # Windows
+            subprocess.run(["code", filename], check=True)
+        else:  # Linux/Mac
+            subprocess.run(["code", filename], check=True)
         print(f"Created and opened {filename} in VS Code.")
     except Exception as e:
         print("Error creating/opening file:", e)
 
 def open_app():
-    parent = QApplication.activeWindow()
-    app_path, ok = QInputDialog.getText(parent, "Open App", "Enter application path or name:")
-    if not ok or not app_path.strip():
+    app_path = input("Enter application path or name: ").strip()
+    if not app_path:
         print("No application specified.")
         return
-    app_path = app_path.strip()
+    
     try:
-        # Use subprocess.Popen to open the app and store its process handle.
         proc = subprocess.Popen(app_path, shell=True)
         opened_apps[app_path] = proc
         print(f"Opened application: {app_path}")
     except Exception as e:
-        QMessageBox.warning(parent, "Open App Error", f"Error opening application: {e}")
+        print(f"Error opening application: {e}")
 
 def close_app():
-    parent = QApplication.activeWindow()
-    app_name, ok = QInputDialog.getText(parent, "Close App", "Enter application name to close:")
-    if not ok or not app_name.strip():
+    app_name = input("Enter application name to close: ").strip()
+    if not app_name:
         print("No application specified.")
         return
-    app_name = app_name.strip()
+    
     proc = opened_apps.get(app_name)
     if proc:
         proc.terminate()
@@ -122,43 +114,40 @@ def close_app():
         print(f"Closed application: {app_name}")
         del opened_apps[app_name]
     else:
-        QMessageBox.information(parent, "Close App", "Application not found among open apps.")
+        print("Application not found among open apps.")
 
 def open_url():
-    parent = QApplication.activeWindow()
-    url, ok = QInputDialog.getText(parent, "Open URL", "Enter URL to open:")
-    if not ok or not url.strip():
+    url = input("Enter URL to open: ").strip()
+    if not url:
         print("No URL specified.")
         return
-    url = url.strip()
+    
     # Fuzzy processing: if url doesn't start with http:// or https://, attempt to complete it
     if not (url.startswith("http://") or url.startswith("https://")):
         url = url.replace(" ", "")
         if "." not in url:
             url += ".com"
         url = "https://www." + url
+    
     try:
-        # Attempt to launch with Chrome to obtain a process handle
-        proc = subprocess.Popen(["chrome", url], shell=True)
-        opened_urls[url] = proc
+        # Try to open with default browser
+        webbrowser.open(url)
         print(f"Opened URL: {url}")
     except Exception as e:
-        import webbrowser
-        webbrowser.open(url)
-        print(f"Opened URL using webbrowser: {url}")
+        print(f"Error opening URL: {e}")
 
 def close_url():
-    parent = QApplication.activeWindow()
-    url, ok = QInputDialog.getText(parent, "Close URL", "Enter URL to close:")
-    if not ok or not url.strip():
+    url = input("Enter URL to close: ").strip()
+    if not url:
         print("No URL specified.")
         return
-    url = url.strip()
+    
     if not (url.startswith("http://") or url.startswith("https://")):
         url = url.replace(" ", "")
         if "." not in url:
             url += ".com"
         url = "https://www." + url
+    
     proc = opened_urls.get(url)
     if proc:
         proc.terminate()
@@ -166,8 +155,4 @@ def close_url():
         print(f"Closed URL: {url}")
         del opened_urls[url]
     else:
-        QMessageBox.information(parent, "Close URL", "URL process not found.")
-
-# Global dictionaries to store process handles
-opened_apps = {}
-opened_urls = {}
+        print("URL process not found.")
